@@ -1,0 +1,9 @@
+vtk>=9.2.0
+trame>=2.5.0
+trame-vtk>=2.5.0
+trame-vuetify>=2.3.0
+dash>=2.14.0
+dash-bootstrap-components>=1.5.0
+websockets>=11.0.0
+asyncio-mqtt>=0.13.0
+numpy>=1.24.0 
