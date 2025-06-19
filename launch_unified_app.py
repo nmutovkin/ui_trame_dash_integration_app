@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """
-Unified VTK Dash WebGL Application Launcher
-==========================================
-Simple launcher for the consolidated VTK visualization app.
+Unified VTK XDMF Dash WebGL Application Launcher
+===============================================
+Simple launcher for the consolidated VTK XDMF visualization app.
 """
 import sys
-from vtk_dash_app import VTKDashApp
+from vtk_dash_app import VTKXDMFDashApp
 
 def main():
-    """Launch the unified VTK Dash application"""
-    print("🚀 Launching Unified VTK Dash WebGL Application")
+    """Launch the unified VTK XDMF Dash application"""
+    print("🚀 Launching Unified VTK XDMF Dash WebGL Application")
     print("=" * 60)
     
     # Parse command line arguments
@@ -23,7 +23,7 @@ def main():
     print("=" * 60)
     
     # Create and run the unified application
-    app = VTKDashApp(host=host, port=port)
+    app = VTKXDMFDashApp(host=host, port=port)
     app.run(debug=debug)
 
 if __name__ == "__main__":

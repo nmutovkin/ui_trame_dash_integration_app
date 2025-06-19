@@ -1,29 +1,33 @@
 #!/usr/bin/env python3
 """
-VTK Dash WebGL Application
-=========================
-Unified VTK visualization using Dash + Three.js WebGL rendering.
-All VTK processing, UI controls, and WebGL rendering in one application.
+VTK XDMF Dash WebGL Application
+==============================
+Unified VTK visualization using Dash + Three.js WebGL rendering with XDMF file support.
+Supports uploading and visualizing XDMF (XML + HDF5) files.
 
 Features:
-- VTK unstructured grid processing
-- Real-time geometry extraction (vertices, faces, colors)
+- XDMF file upload and parsing
+- Real-time geometry extraction from uploaded data
 - Three.js WebGL rendering with GPU acceleration
 - Interactive material controls (opacity, wireframe)
 - Mouse controls (orbit, zoom)
-- Single application architecture
+- Multiple scalar field visualization
 """
 
 import dash
 import dash_bootstrap_components as dbc
 import vtk
-from dash import Input, Output, clientside_callback, dcc, html
+from dash import Input, Output, clientside_callback, dcc, html, State, callback_context
+import base64
+import io
+import os
+import tempfile
 
 
-class VTKDashApp:
+class VTKXDMFDashApp:
     def __init__(self, host="0.0.0.0", port=8050):
         """
-        Initialize unified VTK Dash Application
+        Initialize unified VTK XDMF Dash Application
 
         Args:
             host: Application host interface
@@ -45,15 +49,115 @@ class VTKDashApp:
         self.vtk_data = None
         self.mapper = vtk.vtkDataSetMapper()
         self.actor = vtk.vtkActor()
+        self.reader = None
 
         # State variables
         self.current_opacity = 1.0
         self.current_colormap = "elevation"
         self.wireframe_mode = False
+        self.uploaded_file_path = None
+        self.available_arrays = []
+        self.current_array = None
 
         self.setup_vtk_pipeline()
         self.setup_layout()
         self.setup_callbacks()
+
+    def load_xdmf_file(self, file_path):
+        """Load XDMF file using VTK"""
+        try:
+            # Create XDMF reader
+            reader = vtk.vtkXdmfReader()
+            reader.SetFileName(file_path)
+            reader.Update()
+            
+            # Get the output
+            output = reader.GetOutput()
+            
+            if output.GetNumberOfPoints() == 0:
+                raise ValueError("No points found in XDMF file")
+            
+            self.reader = reader
+            self.vtk_data = output
+            self.uploaded_file_path = file_path
+            
+            # Get available arrays
+            self.available_arrays = []
+            point_data = output.GetPointData()
+            cell_data = output.GetCellData()
+            
+            # Point arrays
+            for i in range(point_data.GetNumberOfArrays()):
+                array_name = point_data.GetArrayName(i)
+                if array_name:
+                    self.available_arrays.append(f"Point: {array_name}")
+            
+            # Cell arrays
+            for i in range(cell_data.GetNumberOfArrays()):
+                array_name = cell_data.GetArrayName(i)
+                if array_name:
+                    self.available_arrays.append(f"Cell: {array_name}")
+            
+            # Set first available array as current
+            if self.available_arrays:
+                self.current_array = self.available_arrays[0]
+                self.apply_array_coloring(self.current_array)
+            else:
+                self.apply_elevation_filter()
+            
+            # Update mapper
+            self.mapper.SetInputData(self.vtk_data)
+            
+            print(f"✅ Loaded XDMF file: {file_path}")
+            print(f"   Points: {output.GetNumberOfPoints()}")
+            print(f"   Cells: {output.GetNumberOfCells()}")
+            print(f"   Arrays: {len(self.available_arrays)}")
+            
+            return True
+            
+        except Exception as e:
+            print(f"❌ Failed to load XDMF file: {str(e)}")
+            return False
+
+    def apply_array_coloring(self, array_selection):
+        """Apply coloring based on selected array"""
+        if not array_selection or not self.vtk_data:
+            return
+        
+        # Parse array selection
+        if array_selection.startswith("Point: "):
+            array_name = array_selection[7:]
+            array_data = self.vtk_data.GetPointData().GetArray(array_name)
+            if array_data:
+                self.vtk_data.GetPointData().SetActiveScalars(array_name)
+                self.mapper.SetScalarModeToUsePointData()
+        elif array_selection.startswith("Cell: "):
+            array_name = array_selection[6:]
+            array_data = self.vtk_data.GetCellData().GetArray(array_name)
+            if array_data:
+                self.vtk_data.GetCellData().SetActiveScalars(array_name)
+                self.mapper.SetScalarModeToUseCellData()
+        
+        self.mapper.SetColorModeToMapScalars()
+        
+        # Set color map
+        lut = vtk.vtkLookupTable()
+        lut.SetHueRange(0.667, 0.0)  # Blue to Red
+        lut.Build()
+        self.mapper.SetLookupTable(lut)
+        
+        self.current_array = array_selection
+
+    def apply_elevation_filter(self):
+        """Apply elevation filter for coloring when no arrays are available"""
+        elevation = vtk.vtkElevationFilter()
+        elevation.SetInputData(self.vtk_data)
+        elevation.SetLowPoint(0, -1, 0)
+        elevation.SetHighPoint(0, 1, 0)
+        elevation.Update()
+        
+        self.vtk_data = elevation.GetOutput()
+        self.current_array = "Elevation"
 
     def setup_vtk_pipeline(self):
         """Setup VTK visualization pipeline"""
@@ -94,14 +198,26 @@ class VTKDashApp:
 
     def extract_geometry_data(self):
         """Extract geometry data for WebGL rendering"""
-        # Get the current VTK data
-        elevation = vtk.vtkElevationFilter()
-        elevation.SetInputData(self.vtk_data)
-        elevation.SetLowPoint(0, -1, 0)
-        elevation.SetHighPoint(0, 1, 0)
-        elevation.Update()
-
-        polydata = elevation.GetOutput()
+        if not self.vtk_data:
+            return {}
+        
+        # Convert to polydata if needed
+        if self.vtk_data.IsA("vtkUnstructuredGrid"):
+            surface_filter = vtk.vtkDataSetSurfaceFilter()
+            surface_filter.SetInputData(self.vtk_data)
+            surface_filter.Update()
+            polydata = surface_filter.GetOutput()
+        else:
+            # For sphere or already polydata - apply elevation if no arrays available
+            if not self.uploaded_file_path and self.current_array == "Elevation":
+                elevation = vtk.vtkElevationFilter()
+                elevation.SetInputData(self.vtk_data)
+                elevation.SetLowPoint(0, -1, 0)
+                elevation.SetHighPoint(0, 1, 0)
+                elevation.Update()
+                polydata = elevation.GetOutput()
+            else:
+                polydata = self.vtk_data
 
         # Extract vertices
         points = polydata.GetPoints()
@@ -141,8 +257,8 @@ class VTKDashApp:
                 lut.GetColor(scalar_val, color)
                 colors.extend(color)
         else:
-            # Default orange color
-            colors = [1.0, 0.5, 0.0] * num_points
+            # Default green color
+            colors = [0.0, 1.0, 0.0] * num_points
 
         return {
             "vertices": vertices,
@@ -168,18 +284,18 @@ class VTKDashApp:
                         dbc.Col(
                             [
                                 html.H1(
-                                    "🚀 VTK Dash WebGL Visualization",
+                                    "🚀 VTK XDMF Dash WebGL Visualization",
                                     className="text-center mb-4",
                                 ),
                                 dbc.Alert(
                                     [
                                         html.H5(
-                                            "🎮 Unified VTK + WebGL Application",
+                                            "📁 XDMF File Visualization",
                                             className="alert-heading",
                                         ),
                                         html.P(
                                             [
-                                                "Architecture: ✅ Single Dash app with VTK + Three.js",
+                                                "Upload XDMF files or use default sphere visualization",
                                                 html.Br(),
                                                 "Rendering: ✅ Client-side WebGL with GPU acceleration",
                                                 html.Br(),
@@ -191,9 +307,46 @@ class VTKDashApp:
                                             ]
                                         ),
                                     ],
-                                    color="success",
+                                    color="info",
                                     className="mb-4",
                                 ),
+                                
+                                # File Upload Section
+                                dbc.Card([
+                                    dbc.CardHeader("📤 Upload XDMF File"),
+                                    dbc.CardBody([
+                                        dcc.Upload(
+                                            id='upload-xdmf',
+                                            children=html.Div([
+                                                '📁 Drag and Drop or ',
+                                                html.A('Select XDMF File')
+                                            ]),
+                                            style={
+                                                'width': '100%',
+                                                'height': '60px',
+                                                'lineHeight': '60px',
+                                                'borderWidth': '1px',
+                                                'borderStyle': 'dashed',
+                                                'borderRadius': '5px',
+                                                'textAlign': 'center',
+                                                'margin': '10px'
+                                            },
+                                            multiple=False,
+                                            accept='.xdmf'
+                                        ),
+                                        html.Div(id='upload-status', className="mt-2"),
+                                        html.Small(
+                                            "Upload .xdmf files. Corresponding .h5 files must be in the same directory.",
+                                            className="text-muted"
+                                        ),
+                                        html.Hr(),
+                                        html.Label("Or try example files:"),
+                                        dbc.ButtonGroup([
+                                            dbc.Button("📦 Load Cube Example", id="load-cube-btn", color="info", size="sm"),
+                                            dbc.Button("🔄 Load Cylinder Example", id="load-cylinder-btn", color="info", size="sm"),
+                                        ], className="w-100 mt-2")
+                                    ])
+                                ], className="mb-4"),
                                 dbc.Row(
                                     [
                                         # WebGL Viewport
@@ -239,6 +392,29 @@ class VTKDashApp:
                                         # Control Panel
                                         dbc.Col(
                                             [
+                                                # Array Selection
+                                                dbc.Card(
+                                                    [
+                                                        dbc.CardBody(
+                                                            [
+                                                                html.H6("🌈 Data Arrays"),
+                                                                html.Label("Active Array:"),
+                                                                dcc.Dropdown(
+                                                                    id='array-dropdown',
+                                                                    options=[],
+                                                                    value=None,
+                                                                    placeholder="Select data array..."
+                                                                ),
+                                                                html.Small(
+                                                                    "Choose scalar field for coloring", 
+                                                                    className="text-muted"
+                                                                ),
+                                                            ]
+                                                        )
+                                                    ],
+                                                    className="mb-3",
+                                                ),
+                                                
                                                 # Material Controls
                                                 dbc.Card(
                                                     [
@@ -390,6 +566,141 @@ class VTKDashApp:
     def setup_callbacks(self):
         """Setup Dash callbacks for VTK processing and WebGL rendering"""
 
+        # File upload callback
+        @self.app.callback(
+            [Output('upload-status', 'children'),
+             Output('array-dropdown', 'options'),
+             Output('array-dropdown', 'value')],
+            [Input('upload-xdmf', 'contents')],
+            [State('upload-xdmf', 'filename')]
+        )
+        def handle_file_upload(contents, filename):
+            """Handle XDMF file upload"""
+            if contents is None:
+                return "", [], None
+            
+            try:
+                # Decode file content
+                content_type, content_string = contents.split(',')
+                decoded = base64.b64decode(content_string)
+                
+                # For demonstration, try to load from current directory first
+                if filename and os.path.exists(filename):
+                    print(f"📁 Loading XDMF file from current directory: {filename}")
+                    success = self.load_xdmf_file(filename)
+                else:
+                    # Save to temporary file and modify XDMF to reference local H5 files
+                    with tempfile.NamedTemporaryFile(mode='wb', suffix='.xdmf', delete=False) as tmp_file:
+                        tmp_file.write(decoded)
+                        tmp_file_path = tmp_file.name
+                    
+                    # Read the XDMF content and try to modify H5 paths to current directory
+                    xdmf_content = decoded.decode('utf-8')
+                    
+                    # Extract H5 filename from XDMF content
+                    import re
+                    h5_matches = re.findall(r'([^/\s]+\.h5):', xdmf_content)
+                    if h5_matches:
+                        h5_filename = h5_matches[0]
+                        if os.path.exists(h5_filename):
+                            # Modify XDMF to use absolute path to H5 file
+                            abs_h5_path = os.path.abspath(h5_filename)
+                            modified_content = xdmf_content.replace(h5_filename + ':', abs_h5_path + ':')
+                            
+                            # Write modified XDMF
+                            with open(tmp_file_path, 'w') as f:
+                                f.write(modified_content)
+                            
+                            print(f"📁 Modified XDMF to reference: {abs_h5_path}")
+                        else:
+                            error_msg = dbc.Alert([
+                                html.Strong("❌ H5 file not found!"), html.Br(),
+                                f"Looking for: {h5_filename}", html.Br(),
+                                "Please ensure the .h5 file is in the same directory as the application."
+                            ], color="danger")
+                            return error_msg, [], None
+                    
+                    # Try to load XDMF file
+                    success = self.load_xdmf_file(tmp_file_path)
+                
+                if success:
+                    # Create dropdown options for arrays
+                    array_options = [{'label': arr, 'value': arr} for arr in self.available_arrays]
+                    
+                    status_msg = dbc.Alert([
+                        html.Strong("✅ File loaded successfully!"), html.Br(),
+                        f"📁 {filename}", html.Br(),
+                        f"🔢 {self.vtk_data.GetNumberOfPoints():,} points, {self.vtk_data.GetNumberOfCells():,} cells", html.Br(),
+                        f"📊 {len(self.available_arrays)} data arrays available"
+                    ], color="success")
+                    
+                    return status_msg, array_options, self.current_array
+                else:
+                    error_msg = dbc.Alert([
+                        html.Strong("❌ Failed to load file!"), html.Br(),
+                        "Please check that the XDMF file format is correct and H5 files are available."
+                    ], color="danger")
+                    return error_msg, [], None
+                    
+            except Exception as e:
+                error_msg = dbc.Alert([
+                    html.Strong("❌ Upload error!"), html.Br(),
+                    str(e)
+                ], color="danger")
+                return error_msg, [], None
+
+        # Example file loading callback
+        @self.app.callback(
+            [Output('upload-status', 'children', allow_duplicate=True),
+             Output('array-dropdown', 'options', allow_duplicate=True),
+             Output('array-dropdown', 'value', allow_duplicate=True)],
+            [Input('load-cube-btn', 'n_clicks'),
+             Input('load-cylinder-btn', 'n_clicks')],
+            prevent_initial_call=True
+        )
+        def load_example_files(cube_clicks, cylinder_clicks):
+            """Load example XDMF files"""
+            ctx = callback_context
+            if not ctx.triggered:
+                return "", [], None
+            
+            button_id = ctx.triggered[0]['prop_id'].split('.')[0]
+            
+            if button_id == 'load-cube-btn' and cube_clicks:
+                filename = "cube_example.xdmf"
+            elif button_id == 'load-cylinder-btn' and cylinder_clicks:
+                filename = "cylinder_example.xdmf"
+            else:
+                return "", [], None
+            
+            if os.path.exists(filename):
+                success = self.load_xdmf_file(filename)
+                
+                if success:
+                    array_options = [{'label': arr, 'value': arr} for arr in self.available_arrays]
+                    
+                    status_msg = dbc.Alert([
+                        html.Strong("✅ Example file loaded!"), html.Br(),
+                        f"📁 {filename}", html.Br(),
+                        f"🔢 {self.vtk_data.GetNumberOfPoints():,} points, {self.vtk_data.GetNumberOfCells():,} cells", html.Br(),
+                        f"📊 {len(self.available_arrays)} data arrays available"
+                    ], color="success")
+                    
+                    return status_msg, array_options, self.current_array
+                else:
+                    error_msg = dbc.Alert([
+                        html.Strong("❌ Failed to load example file!"), html.Br(),
+                        f"File: {filename}"
+                    ], color="danger")
+                    return error_msg, [], None
+            else:
+                error_msg = dbc.Alert([
+                    html.Strong("❌ Example file not found!"), html.Br(),
+                    f"Looking for: {filename}", html.Br(),
+                    "Run 'python create_example_xdmf.py' to generate example files."
+                ], color="warning")
+                return error_msg, [], None
+
         # VTK geometry processing callback (includes initial load)
         @self.app.callback(
             Output("vtk-geometry-store", "data"),
@@ -398,21 +709,27 @@ class VTKDashApp:
                 Input("wireframe-control", "value"),
                 Input("resolution-control", "value"),
                 Input("regenerate-btn", "n_clicks"),
+                Input("array-dropdown", "value"),
                 Input("trigger-initial-load", "children"),
             ],
             prevent_initial_call=False
         )
-        def update_vtk_geometry(opacity, wireframe, resolution, regenerate_clicks, trigger_initial):
+        def update_vtk_geometry(opacity, wireframe, resolution, regenerate_clicks, array_selection, trigger_initial):
             """Process VTK data and return geometry for WebGL"""
             # Update state
             self.current_opacity = opacity if opacity is not None else 1.0
             self.wireframe_mode = wireframe if wireframe is not None else False
 
-            # Regenerate VTK pipeline if needed
-            ctx = dash.callback_context
+            # Handle array selection change
+            if array_selection and array_selection != self.current_array:
+                self.apply_array_coloring(array_selection)
+
+            # Regenerate VTK pipeline if needed (only for default sphere)
+            ctx = callback_context
             if (
                 ctx.triggered
                 and "regenerate-btn" in ctx.triggered[0]["prop_id"]
+                and not self.uploaded_file_path  # Only regenerate if using default sphere
             ):
                 self.regenerate_vtk_pipeline(resolution if resolution is not None else 30)
 
@@ -420,8 +737,9 @@ class VTKDashApp:
             geometry_data = self.extract_geometry_data()
 
             print(
-                f"🎨 VTK Update: opacity={self.current_opacity:.2f}, wireframe={self.wireframe_mode}, vertices={geometry_data['vertex_count']}"
+                f"🎨 VTK Update: opacity={self.current_opacity:.2f}, wireframe={self.wireframe_mode}"
             )
+            print(f"   Array: {self.current_array}, vertices={geometry_data.get('vertex_count', 0)}")
 
             return geometry_data
 
@@ -446,6 +764,8 @@ class VTKDashApp:
                 f"🎭 Opacity: {geometry_data.get('opacity', 1.0):.2f}",
                 html.Br(),
                 f"📐 Wireframe: {'On' if geometry_data.get('wireframe', False) else 'Off'}",
+                html.Br(),
+                f"📊 Array: {self.current_array or 'Default'}",
             ]
 
             import datetime
@@ -699,12 +1019,18 @@ class VTKDashApp:
         print(f"🔄 VTK pipeline regenerated with resolution {resolution}")
 
     def run(self, debug=False):
-        """Start the unified VTK Dash application"""
-        print("🚀 Starting Unified VTK Dash WebGL Application")
+        """Start the unified VTK XDMF Dash application"""
+        print("🚀 Starting Unified VTK XDMF Dash WebGL Application")
         print("=" * 60)
         print(f"🌐 Application URL: http://{self.host}:{self.port}")
+        print("✅ VTK processing: Integrated")
+        print("✅ XDMF support: Available")
+        print("✅ WebGL rendering: Three.js")
+        print("✅ Communication: Direct Dash callbacks")
+        print("❌ WebSockets: Eliminated")
+        print("❌ Trame: Eliminated")
         print("=" * 60)
-        print("🎯 Open browser and start visualizing!")
+        print("🎯 Open browser and upload XDMF files!")
 
         self.app.run(host=self.host, port=self.port, debug=debug)
 
@@ -717,5 +1043,5 @@ if __name__ == "__main__":
     port = int(sys.argv[2]) if len(sys.argv) > 2 else 8050
     debug = len(sys.argv) > 3 and sys.argv[3].lower() == "debug"
 
-    app = VTKDashApp(host=host, port=port)
+    app = VTKXDMFDashApp(host=host, port=port)
     app.run(debug=debug)

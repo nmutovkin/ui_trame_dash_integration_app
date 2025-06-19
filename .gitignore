@@ -81,4 +81,8 @@ htmlcov/
 
 # Backup files
 *.bak
-*.backup 
+*.backup
+
+# H5
+*.h5
+*.xdmf
