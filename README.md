@@ -1,14 +1,15 @@
-# VTK WebGL Visualization
+# VTK Dash WebGL Visualization
 
-Client-side VTK visualization using Three.js WebGL rendering with real-time server streaming.
+Unified VTK visualization using Dash + Three.js WebGL rendering in a single application.
 
 ## Architecture
 
-This project implements a distributed VTK visualization system with:
+This project implements a unified VTK visualization system with:
 
-- **VTK Geometry Server**: Extracts geometry data from VTK objects and streams via WebSocket
+- **Single Dash Application**: All VTK processing and WebGL rendering in one app
+- **Direct Integration**: VTK processing integrated with Dash callbacks
 - **WebGL Client**: Browser-based Three.js rendering with GPU acceleration
-- **Real-time Communication**: WebSocket streaming for live data updates
+- **No External Dependencies**: Eliminated WebSockets and Trame
 
 ## Features
 
@@ -23,10 +24,11 @@ This project implements a distributed VTK visualization system with:
 - Camera reset and positioning
 
 ### 🔧 Technical Benefits
-- Minimal server load (geometry data only)
-- Scalable to multiple concurrent users
+- Single application architecture
+- Direct VTK-Dash integration
 - Cross-platform WebGL compatibility
 - Real-time parameter adjustments
+- Eliminated network complexity
 
 ## Quick Start
 
@@ -36,40 +38,35 @@ This project implements a distributed VTK visualization system with:
 pip install -r requirements.txt
 ```
 
-### 2. Start VTK Server
+### 2. Launch Unified Application
 
 ```bash
-python vtk_geometry_server.py localhost 8080 8081
+python launch_unified_app.py
 ```
 
-This starts:
-- VTK server on `http://localhost:8080`
-- WebSocket streaming on `ws://localhost:8081`
-
-### 3. Start WebGL Client
-
+Or directly:
 ```bash
-python webgl_vtk_client.py localhost 8080 0.0.0.0 8052
+python vtk_dash_app.py
 ```
 
-This starts the WebGL client on `http://localhost:8052`
+This starts the unified app on `http://localhost:8050`
 
-### 4. Open Browser
+### 3. Open Browser
 
-Navigate to `http://localhost:8052` to view the WebGL visualization.
+Navigate to `http://localhost:8050` to view the WebGL visualization.
 
 ## Usage
 
 ### Command Line Arguments
 
-**VTK Server:**
+**Unified Application:**
 ```bash
-python vtk_geometry_server.py [host] [port] [websocket_port]
+python vtk_dash_app.py [host] [port] [debug]
 ```
 
-**WebGL Client:**
+**Launcher Script:**
 ```bash
-python webgl_vtk_client.py [vtk_host] [vtk_port] [client_host] [client_port]
+python launch_unified_app.py [host] [port] [debug]
 ```
 
 ### Web Interface
@@ -90,17 +87,17 @@ The WebGL client provides:
 
 ### Data Flow
 
-1. **VTK Processing**: Server extracts geometry (vertices, faces, colors)
-2. **WebSocket Streaming**: Real-time data transmission
-3. **WebGL Rendering**: Browser GPU-accelerated visualization
-4. **User Interaction**: Local mouse controls and UI updates
+1. **User Interaction**: UI controls trigger Dash callbacks
+2. **VTK Processing**: Direct geometry processing (vertices, faces, colors)
+3. **Data Transfer**: JSON data via Dash Store component
+4. **WebGL Rendering**: Browser GPU-accelerated visualization
 
-### Benefits of Client-Side Rendering
+### Benefits of Unified Architecture
 
-- **Performance**: Local GPU acceleration
-- **Scalability**: Server only processes geometry
-- **Responsiveness**: Real-time interaction without network delay
-- **Bandwidth**: Efficient data streaming vs. image transmission
+- **Simplicity**: Single application, no network complexity
+- **Performance**: Direct function calls, no serialization overhead
+- **Reliability**: No WebSocket connection issues
+- **Development**: Standard Dash patterns and debugging
 
 ## System Requirements
 
@@ -124,18 +121,18 @@ The WebGL client provides:
 ### Project Structure
 
 ```
-├── vtk_geometry_server.py    # VTK data processing and WebSocket streaming
-├── webgl_vtk_client.py       # Three.js WebGL client interface
-├── requirements.txt          # Python dependencies
-├── ARCHITECTURE.md          # Detailed architecture documentation
+├── vtk_dash_app.py          # Unified VTK + Dash application
+├── launch_unified_app.py    # Simple launcher script
+├── requirements.txt         # Python dependencies
+├── ARCHITECTURE.md         # Detailed architecture documentation
 └── README.md               # This file
 ```
 
 ### Key Technologies
 
-- **Backend**: VTK, Trame, WebSockets
+- **Backend**: VTK, Dash
 - **Frontend**: Dash, Three.js, WebGL
-- **Communication**: WebSocket (geometry streaming)
+- **Communication**: Direct Dash callbacks
 - **Rendering**: Client-side GPU acceleration
 
 ## Contributing
